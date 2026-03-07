@@ -11,12 +11,24 @@ pub fn pick_open_pdf() -> Option<String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
-fn get_pdf_list(current_path: &str) -> Vec<PathBuf> {
+/// Build a sorted list of PDF files in the same directory as `current_path`.
+/// If `cache` is provided and the directory matches, returns the cached list.
+pub fn get_pdf_list(
+    current_path: &str,
+    cache: Option<&(PathBuf, Vec<PathBuf>)>,
+) -> Vec<PathBuf> {
     let path = Path::new(current_path);
     let dir = match path.parent() {
         Some(d) => d,
         None => return vec![path.to_path_buf()],
     };
+
+    // Return cached list if directory matches
+    if let Some((cached_dir, cached_list)) = cache {
+        if cached_dir == dir {
+            return cached_list.clone();
+        }
+    }
 
     let mut pdfs: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(entries) => entries
@@ -48,8 +60,12 @@ fn find_index(pdfs: &[PathBuf], current_path: &str) -> Option<usize> {
     pdfs.iter().position(|p| p == current)
 }
 
-pub fn get_sibling_pdf(current_path: &str, direction: i32) -> Option<(String, usize, usize)> {
-    let pdfs = get_pdf_list(current_path);
+pub fn get_sibling_pdf(
+    current_path: &str,
+    direction: i32,
+    cache: Option<&(PathBuf, Vec<PathBuf>)>,
+) -> Option<(String, usize, usize)> {
+    let pdfs = get_pdf_list(current_path, cache);
     let current_idx = find_index(&pdfs, current_path)?;
     let new_idx = if direction > 0 {
         (current_idx + 1) % pdfs.len()
@@ -64,8 +80,11 @@ pub fn get_sibling_pdf(current_path: &str, direction: i32) -> Option<(String, us
     ))
 }
 
-pub fn get_pdf_position(current_path: &str) -> (usize, usize) {
-    let pdfs = get_pdf_list(current_path);
+pub fn get_pdf_position(
+    current_path: &str,
+    cache: Option<&(PathBuf, Vec<PathBuf>)>,
+) -> (usize, usize) {
+    let pdfs = get_pdf_list(current_path, cache);
     let idx = find_index(&pdfs, current_path).unwrap_or(0);
     (idx + 1, pdfs.len())
 }

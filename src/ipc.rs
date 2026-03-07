@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tao::window::Window;
 use wry::WebView;
@@ -33,20 +34,30 @@ pub fn handle_ipc_message(
         "open_pdf" => {
             let path = parsed.path.or_else(file_ops::pick_open_pdf);
             if let Some(p) = path {
-                load_and_send_pdf(webview, &p, state);
+                // Update cache if directory changed
+                update_dir_cache(&p, state);
+                let cache = state.lock().unwrap().cached_dir.clone();
+                let pos = file_ops::get_pdf_position(&p, cache.as_ref());
+                load_and_send_pdf(webview, &p, Some(pos), state);
             }
         }
         "next_pdf" => {
             if let Some(ref current) = parsed.path {
-                if let Some((next, idx, total)) = file_ops::get_sibling_pdf(current, 1) {
-                    load_and_send_pdf_with_pos(webview, &next, idx, total, state);
+                let cache = state.lock().unwrap().cached_dir.clone();
+                if let Some((next, idx, total)) =
+                    file_ops::get_sibling_pdf(current, 1, cache.as_ref())
+                {
+                    load_and_send_pdf(webview, &next, Some((idx, total)), state);
                 }
             }
         }
         "prev_pdf" => {
             if let Some(ref current) = parsed.path {
-                if let Some((prev, idx, total)) = file_ops::get_sibling_pdf(current, -1) {
-                    load_and_send_pdf_with_pos(webview, &prev, idx, total, state);
+                let cache = state.lock().unwrap().cached_dir.clone();
+                if let Some((prev, idx, total)) =
+                    file_ops::get_sibling_pdf(current, -1, cache.as_ref())
+                {
+                    load_and_send_pdf(webview, &prev, Some((idx, total)), state);
                 }
             }
         }
@@ -79,58 +90,42 @@ pub fn handle_ipc_message(
         "ready" => {
             let pending = state.lock().unwrap().pending_file.take();
             if let Some(p) = pending {
-                load_and_send_pdf(webview, &p, state);
+                update_dir_cache(&p, state);
+                let cache = state.lock().unwrap().cached_dir.clone();
+                let pos = file_ops::get_pdf_position(&p, cache.as_ref());
+                load_and_send_pdf(webview, &p, Some(pos), state);
             }
         }
         _ => eprintln!("Unknown IPC command: {}", parsed.command),
     }
 }
 
-fn load_and_send_pdf(webview: &WebView, path: &str, state: &Arc<Mutex<AppState>>) {
-    match std::fs::read(path) {
-        Ok(bytes) => {
-            let file_size = bytes.len() as u64;
-            {
-                let mut st = state.lock().unwrap();
-                st.pdf_bytes = Some(bytes);
-                st.current_path = Some(path.to_string());
-            }
-
-            let (index, total) = file_ops::get_pdf_position(path);
-            let filename = std::path::Path::new(path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("Unknown");
-
-            send_to_js(
-                webview,
-                "pdf_ready",
-                &serde_json::json!({
-                    "path": path,
-                    "filename": filename,
-                    "file_size": file_size,
-                    "index": index,
-                    "total": total,
-                }),
-            );
+/// Update the cached directory listing if the file's parent directory differs
+/// from the currently cached one.
+fn update_dir_cache(path: &str, state: &Arc<Mutex<AppState>>) {
+    let file_dir = Path::new(path).parent().map(|d| d.to_path_buf());
+    let needs_update = {
+        let st = state.lock().unwrap();
+        match (&st.cached_dir, &file_dir) {
+            (Some((cached, _)), Some(dir)) => cached != dir,
+            (None, Some(_)) => true,
+            _ => false,
         }
-        Err(e) => {
-            send_to_js(
-                webview,
-                "error",
-                &serde_json::json!({
-                    "message": format!("Failed to read PDF: {}", e)
-                }),
-            );
+    };
+    if needs_update {
+        let list = file_ops::get_pdf_list(path, None);
+        if let Some(dir) = file_dir {
+            state.lock().unwrap().cached_dir = Some((dir, list));
         }
     }
 }
 
-fn load_and_send_pdf_with_pos(
+/// Load a PDF from disk and send the `pdf_ready` event to JS.
+/// If `position` is provided, uses that (index, total); otherwise computes it.
+fn load_and_send_pdf(
     webview: &WebView,
     path: &str,
-    index: usize,
-    total: usize,
+    position: Option<(usize, usize)>,
     state: &Arc<Mutex<AppState>>,
 ) {
     match std::fs::read(path) {
@@ -138,11 +133,15 @@ fn load_and_send_pdf_with_pos(
             let file_size = bytes.len() as u64;
             {
                 let mut st = state.lock().unwrap();
-                st.pdf_bytes = Some(bytes);
+                st.pdf_bytes = Some(Arc::new(bytes));
                 st.current_path = Some(path.to_string());
             }
 
-            let filename = std::path::Path::new(path)
+            let (index, total) = position.unwrap_or_else(|| {
+                let cache = state.lock().unwrap().cached_dir.clone();
+                file_ops::get_pdf_position(path, cache.as_ref())
+            });
+            let filename = Path::new(path)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("Unknown");

@@ -92,7 +92,7 @@ var PdfViewer = (function() {
       pages.forEach(function(p) { observer.unobserve(p.div); });
     }
     pages = [];
-    pdfDoc = null;
+    if (pdfDoc) { pdfDoc.destroy(); pdfDoc = null; }
     pageCount = 0;
     viewer.innerHTML = '';
     viewer.classList.remove('active');

@@ -67,10 +67,14 @@ fn main() {
             } else if uri == "/pdf" {
                 let st = state_proto.lock().unwrap();
                 match &st.pdf_bytes {
-                    Some(bytes) => wry::http::Response::builder()
-                        .header("Content-Type", "application/pdf")
-                        .body(Cow::Owned(bytes.clone()))
-                        .unwrap(),
+                    Some(bytes) => {
+                        let data = Arc::clone(bytes);
+                        drop(st);
+                        wry::http::Response::builder()
+                            .header("Content-Type", "application/pdf")
+                            .body(Cow::Owned(data.to_vec()))
+                            .unwrap()
+                    }
                     None => wry::http::Response::builder()
                         .status(404)
                         .body(Cow::Borrowed(b"No PDF" as &[u8]))
@@ -182,25 +186,6 @@ fn build_html() -> String {
 }
 
 fn base64_encode(data: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity(data.len() * 4 / 3 + 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        result.push(CHARS[((n >> 18) & 63) as usize] as char);
-        result.push(CHARS[((n >> 12) & 63) as usize] as char);
-        if chunk.len() > 1 {
-            result.push(CHARS[((n >> 6) & 63) as usize] as char);
-        } else {
-            result.push('=');
-        }
-        if chunk.len() > 2 {
-            result.push(CHARS[(n & 63) as usize] as char);
-        } else {
-            result.push('=');
-        }
-    }
-    result
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(data)
 }
