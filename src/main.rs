@@ -8,7 +8,9 @@ use tao::{
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
     window::WindowBuilder,
 };
-use wry::{WebViewBuilder, WebViewBuilderExtWindows};
+use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOZORDER};
+use wry::{WebViewBuilder, WebViewBuilderExtWindows, WebViewExtWindows};
 
 mod file_ops;
 mod ipc;
@@ -142,6 +144,22 @@ fn main() {
         match event {
             Event::UserEvent(UserEvent::IpcMessage(msg)) => {
                 ipc::handle_ipc_message(&msg, &_webview, &window, &app_state);
+            }
+            Event::WindowEvent {
+                event: WindowEvent::Resized(new_size),
+                ..
+            } => {
+                let w = new_size.width as i32;
+                let h = new_size.height as i32;
+                unsafe {
+                    let controller = _webview.controller();
+                    let _ = controller.SetBounds(RECT { left: 0, top: 0, right: w, bottom: h });
+                    let mut host = HWND::default();
+                    if controller.ParentWindow(&mut host).is_ok() {
+                        let _ = SetWindowPos(host, None, 0, 0, w, h,
+                            SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOZORDER);
+                    }
+                }
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
